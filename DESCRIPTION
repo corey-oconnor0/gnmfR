@@ -1,0 +1,17 @@
+Package: GNMF
+Title: Graph Regularized Non-Negative Matrix Factorization
+Version: 0.0.0.0
+Authors@R: person("Corey", "O'Connor", email="corey.oconnor001@umb.edu", role=c("aut", "cre"))
+Description: This package implements two authors' work on GNMF in R and Rcpp.  These authors are Cai et al and Hofree et al.
+License: GNU General Public Liscense, Version 3
+Encoding: UTF-8
+LazyData: true
+Depends:
+	R (>= 3.5.0),
+	Rcpp,
+	RcppArmadillo
+LinkingTo:
+	Rcpp,
+	RcppArmadillo
+Maintaner: Corey O'Connor <corey.oconnor001@umb.edu>
+RoxygenNote: 6.1.1

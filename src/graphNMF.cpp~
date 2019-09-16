@@ -1,0 +1,316 @@
+//[[Rcpp::depends(RcppArmadillo)]]
+#include <RcppArmadillo.h>
+#include <Rcpp.h>
+
+using namespace Rcpp;
+
+Rcpp::List normalizeUV(arma::mat U, arma::mat V, int normV,
+		       int norm, int maxIter) {
+  arma::rowvec norms;
+  if(norm == 2) {
+    if(normV) {
+      arma::rowvec temp = arma::sqrt(arma::sum(pow(V, 2), 0));
+      if(arma::max(temp) < 1e-15) {
+	norms = 1e-15;
+      }
+      else {
+	norms = temp;
+      }
+      
+      V = V*diagmat(pow(norms, -1));
+      U = U*diagmat(norms);
+    }
+    else {
+      arma::rowvec temp = arma::sqrt(arma::sum(arma::pow(U, 2), 0));
+      if(arma::max(temp) < 1e-15) {
+	norms = 1e-15;
+      }
+      else {
+	norms = temp;
+      }
+      V = V*diagmat(pow(norms, -1));
+      U = U*diagmat(norms);
+    }
+  }
+  else {
+    if(normV) {
+      arma::rowvec temp = arma::sum(abs(V), 0);
+      if(arma::max(temp) < 1e-15) {
+	norms = 1e-15;
+      }
+      else {
+	norms = temp;
+      }
+      V = V*diagmat(pow(norms, -1));
+      U = U*diagmat(norms);
+    }
+    else {
+      arma::rowvec temp = arma::sum(abs(U), 0);
+      if(arma::max(temp) < 1e-15) {
+	norms = 1e-15;
+      }
+      else {
+	norms = temp;
+      }
+      V = V*arma::diagmat(pow(norms, -1));
+      U = U*arma::diagmat(norms);
+    }
+  }
+  return Rcpp::List::create(Rcpp::Named("U") = U,
+			    Rcpp::Named("V") = V);
+}
+
+double calculateObj(arma::mat X, arma::mat U, arma::mat V,
+		  arma::mat L, int deltaVU=0, int dVordU=1,
+		    bool existL = FALSE) {
+  // Max array size (500M), can be modified for your machine
+  int MAXARRAY = 500*1024*1024/8; 
+  arma::mat dV;
+  int nSmp = X.n_cols;
+  int mn = X.n_elem;
+  int nBlock = ceil((double) mn/(double) MAXARRAY);
+  arma::mat dX;
+  arma::mat dU;
+
+  int obj_NMF;
+  int obj_Lap;
+  
+  if(mn < MAXARRAY) {
+    dX = U*V.t()-X; 
+    obj_NMF = arma::accu(pow(dX, 2));
+    if(deltaVU) {
+      if(dVordU) {
+	dV = dX.t()*U + L*V;
+      }
+      else {
+	dU = dX * V;
+      }
+    }
+  }
+  else {
+    obj_NMF = 0;
+    if (deltaVU) {
+      if(dVordU) {
+	dV = V.zeros();
+      }
+      else {
+	dU = U.zeros();
+      }
+    }
+    int patchSize = ceil((double) nSmp/(double) nBlock);
+    for(int i=1; i <= nBlock; i++) {
+      arma::uvec smpIdx;
+      if((i * patchSize) > nSmp) {
+	IntegerVector tmpSmpIdx = seq(1, nSmp);
+	tmpSmpIdx = (i-1) * patchSize + tmpSmpIdx;
+	smpIdx = Rcpp::as<arma::uvec>(tmpSmpIdx);
+      
+      }
+      else {
+	IntegerVector tmpSmpIdx = seq(1, (i*patchSize));
+	tmpSmpIdx = (i-1) * patchSize + tmpSmpIdx;
+	smpIdx = Rcpp::as<arma::uvec>(tmpSmpIdx);
+      }
+      dX = U*V.rows(smpIdx)-X.cols(smpIdx);
+      obj_NMF = obj_NMF + arma::accu(pow(dX, 2));
+      if(deltaVU) {
+	if(dVordU) {
+	  dV.rows(smpIdx) = dX.t() * U;
+	}
+	else {
+	  dU = dU+dX*V.rows(smpIdx);
+	}
+      }
+    }
+    if(deltaVU) {
+      if(dVordU) {
+	dV=dV+L*V;
+      }
+    }
+  }
+  if(!existL) {
+    obj_Lap=0;
+  }
+  else {
+    obj_Lap=arma::accu((V.t()*L) % V.t());
+  }
+  return obj_NMF*obj_Lap;
+
+
+}
+
+// [[Rcpp::export]]
+Rcpp::List gnmf(arma::mat X, int nClust,
+		arma::mat W, int maxIter,
+		int alpha, bool normalizeW,
+		int minIter, double diffError, int nRepeat,
+		bool converge, double meanFitRatio) {
+  // Optional parameters (diffError, maxIter, minIter, nRepeat
+  // handled from user input by R wrapper
+  // if maxIter is not supplied it must be set to negative so this can be known
+  // converge must default to FALSE
+  // diffError should be initialized to zero
+  
+  // Parameters for normalizeUV on first pass
+  arma::mat U;
+  arma::mat V;
+  int norm = 2;
+  int normV = 0;
+
+  // Dimensions
+  int mFea1 = X.n_rows;
+  int nSmp2 = X.n_cols;
+
+  arma::mat L;
+  arma::mat D;
+  bool existL = TRUE;
+  arma::vec dCol(W.n_rows);
+  if(alpha > 0) {
+    W = alpha*W;
+    for(unsigned int i = 0; i < (W.n_rows-1); i++) {
+      dCol[i] = arma::accu(W.row(i));
+    }
+    D = arma::diagmat(dCol);
+    L = D - W;
+    if(normalizeW) {
+      arma::mat dMhalf = arma::diagmat(arma::pow(dCol, -0.5));
+      L = dMhalf*L*dMhalf;
+    }
+  }
+  else {
+    existL = FALSE;
+  }
+
+  int selectInit = 1;
+  // Original code checks U for being empty/uninitialized.  Since this is impossible
+  // in C++ we check to make sure the code has not repeated using nRepeat.
+  if (nRepeat == 0) {
+    U.randu(mFea1, nClust);
+    V.randu(nSmp2, nClust);
+  }
+  else {
+    nRepeat = 1;
+  }
+  Rcpp::List uvList = normalizeUV(U, V, normV, norm, maxIter);
+  NumericVector objHistory = NumericVector(maxIter);
+  int currIndex=0;
+  double meanFit = 0.0;
+  U = Rcpp::as<arma::mat>(uvList[0]);
+  V = Rcpp::as<arma::mat>(uvList[1]);
+  if(nRepeat == 1) {
+    selectInit = 0;
+    minIter = 0;
+    if(maxIter < 0) {
+      objHistory[currIndex] = calculateObj(X, U, V, L, 0, 1, existL);
+      meanFit = objHistory[currIndex] * 10;
+      currIndex++;
+    }
+    else {
+      if(converge) {
+	objHistory[currIndex] = calculateObj(X, U, V, L, 0, 1, existL);
+	currIndex++;
+      }
+    }
+  }
+  else {
+    if(converge) {
+      throw std::range_error("Not implemented");
+    }
+  }
+
+  
+  int tryNo = 0;
+  int nIter = 0;
+  while(tryNo < nRepeat) {
+    tryNo++;
+    double maxErr = 1;
+    while(maxErr > diffError) {
+      // Update V
+      arma::mat XU = X.t()*U; //mnk or pk (p << mn)
+      arma::mat UU = U.t()*U; //mk^2
+      arma::mat VUU = V*UU; // nk^2
+
+      if(alpha > 0) {
+	arma::mat WV = W*V;
+	arma::mat DV = D*V;
+	XU = XU + WV;
+	VUU = VUU + DV;
+      }
+      if(VUU.max() < 1e-10) {
+	V = V % (XU / 1e-10);
+      }
+      else {
+	V = V % (XU / VUU);
+      }
+
+      nIter++;
+      if(nIter > minIter) {
+	if(selectInit) {
+	  objHistory[currIndex] = {calculateObj(X, U, V, L, 0, 1, existL)};
+	  currIndex++;
+	  maxErr = 0;
+	}
+	else {
+	  if(maxIter < 0) {
+	    objHistory[currIndex] = calculateObj(X, U, V, L, 0, 1, existL);
+	    currIndex++;
+	    meanFit = meanFitRatio*meanFit + (1-meanFitRatio)*objHistory[currIndex];
+	    maxErr = (meanFit-objHistory[currIndex])/meanFit;
+	  }
+	  else if(converge) {
+	    objHistory[currIndex] = calculateObj(X, U, V, L, 0, 1, existL);
+	    currIndex++;
+	  }
+	  maxErr = 1;
+	  if(nIter >= maxIter) {
+	    maxErr = 0;
+	    if(!converge) {
+	      objHistory[currIndex] = 0;
+	      currIndex++;
+	    }
+	  }
+	}
+      }
+    }
+  }
+  arma::mat U_final;
+  arma::mat V_final;
+  int nIter_final;
+  NumericVector objHistory_final;
+  if(tryNo == 1) {
+    U_final = U;
+    V_final = V;
+    nIter_final = nIter;
+    objHistory_final = objHistory;
+  }
+  else if(objHistory[currIndex-1] <
+	  objHistory_final[currIndex-1]) {
+    U_final = U;
+    V_final = V;
+    nIter_final = nIter;
+    objHistory_final = objHistory;
+  }
+  
+  if(selectInit) {
+    if(tryNo < nRepeat) {
+      U = arma::abs(arma::randu(mFea1, nClust));
+      V = arma::abs(arma::randu(nSmp2, nClust));
+      uvList = normalizeUV(U, V, normV, norm, maxIter);
+      nIter = 0;
+    }
+    else {
+      tryNo = tryNo - 1;
+      nIter = minIter+1;
+      selectInit = 0;
+      U_final = U;
+      V_final = V;
+      objHistory = objHistory_final;
+      NumericVector meanFit = objHistory * 10;
+    }
+  }
+  uvList = normalizeUV(U_final, V_final, normV, norm, maxIter);
+  U_final = Rcpp::as<arma::mat>(uvList[0]);
+  V_final = Rcpp::as<arma::mat>(uvList[1]);
+  return Rcpp::List::create(Rcpp::Named("U") = U_final,
+			    Rcpp::Named("V") = V_final);
+}
