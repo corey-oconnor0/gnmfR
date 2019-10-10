@@ -2,3 +2,6 @@
 
 export(computeWeight)
 export(gnmfCai)
+
+useDynLib(gnmfR)
+importFrom(Rcpp, sourceCpp)

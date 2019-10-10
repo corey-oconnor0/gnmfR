@@ -1,4 +1,4 @@
-Package: GNMF
+Package: gnmfR
 Title: Graph Regularized Non-Negative Matrix Factorization
 Version: 0.0.0.0
 Authors@R: person("Corey", "O'Connor", email="corey.oconnor001@umb.edu", role=c("aut", "cre"))
