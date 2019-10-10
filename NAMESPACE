@@ -4,4 +4,4 @@ export(computeWeight)
 export(gnmfCai)
 
 useDynLib(gnmfR)
-importFrom(Rcpp, sourceCpp)
+importFrom(Rcpp, sourceCpp, RcppArmadillo)
